@@ -12,16 +12,16 @@
     var opt = opt || {};
 
     // required
-    this.out_depth = opt.filters;
-    this.sx = opt.sx; // filter size. Should be odd if possible, it's cleaner.
-    this.in_depth = opt.in_depth;
-    this.in_sx = opt.in_sx;
-    this.in_sy = opt.in_sy;
+    this.out_depth = opt.filters |0;
+    this.sx = opt.sx |0; // filter size. Should be odd if possible, it's cleaner.
+    this.in_depth = opt.in_depth |0;
+    this.in_sx = opt.in_sx |0;
+    this.in_sy = opt.in_sy |0;
     
     // optional
-    this.sy = typeof opt.sy !== 'undefined' ? opt.sy : this.sx;
-    this.stride = typeof opt.stride !== 'undefined' ? opt.stride : 1; // stride at which we apply filters to input volume
-    this.pad = typeof opt.pad !== 'undefined' ? opt.pad : 0; // amount of 0 padding to add around borders of input volume
+    this.sy = (typeof opt.sy !== 'undefined' ? opt.sy : this.sx) |0;
+    this.stride = (typeof opt.stride !== 'undefined' ? opt.stride : 1) |0; // stride at which we apply filters to input volume
+    this.pad = (typeof opt.pad !== 'undefined' ? opt.pad : 0) |0; // amount of 0 padding to add around borders of input volume
     this.l1_decay_mul = typeof opt.l1_decay_mul !== 'undefined' ? opt.l1_decay_mul : 0.0;
     this.l2_decay_mul = typeof opt.l2_decay_mul !== 'undefined' ? opt.l2_decay_mul : 1.0;
 
@@ -29,8 +29,8 @@
     // note we are doing floor, so if the strided convolution of the filter doesnt fit into the input
     // volume exactly, the output volume will be trimmed and not contain the (incomplete) computed
     // final application.
-    this.out_sx = Math.floor((this.in_sx + this.pad * 2 - this.sx) / this.stride + 1);
-    this.out_sy = Math.floor((this.in_sy + this.pad * 2 - this.sy) / this.stride + 1);
+    this.out_sx = Math.floor((this.in_sx + this.pad * 2 - this.sx) / this.stride + 1) |0;
+    this.out_sy = Math.floor((this.in_sy + this.pad * 2 - this.sy) / this.stride + 1) |0;
     this.layer_type = 'conv';
 
     // initializations
@@ -40,7 +40,7 @@
     this.biases = new Vol(1, 1, this.out_depth, bias);
   }
   ConvLayer.prototype = {
-    forward: function(V, is_training) {
+    forward_orig: function(V, is_training) {
       this.in_act = V;
 
       var A = new Vol(this.out_sx, this.out_sy, this.out_depth, 0.0);
@@ -64,6 +64,74 @@
                     //a += f.get(fx, fy, fd) * V.get(ox, oy, fd);
                     // avoid function call overhead for efficiency, compromise modularity :(
                     a += f.w[((f.sx * fy)+fx)*f.depth+fd] * V.w[((V.sx * oy)+ox)*V.depth+fd];
+                  }
+                }
+              }
+            }
+            a += this.biases.w[d];
+            A.set(ax, ay, d, a);
+          }
+        }
+      }
+      this.out_act = A;
+      return this.out_act;
+    },
+    forward: function(V, is_training) {
+      this.in_act = V;
+      
+      //console.log("forward_mdda()");
+      // Orig   #5 iteration : 4880ms (original)
+      // Dupe   #5 iteration : 5067ms (1x console.log!)
+      // oxoy   #5 iteration : 4155ms (move oy,ox calc outside of inner loop)
+      // xy|0   #5 iteration : 4155ms (type hint on x and y)
+      // xyst|0 #5 iteration : 2607ms (type hint on stride_x and stride_y)
+      // more|0 #5 iteration : 2662ms (type hint on f>depth - WORSE)
+      // hint|0 #5 iteration : 2591ms (type hint on constructors)
+      // ox out #5 iteration : 2586ms (move ox variable setting outside y loop (splitting if makes it WORSE, though))
+      // xy->yx #5 iteration : 2398ms (switch loop order, so that faster moving indices inside (better cache perf))
+      // contru #5 iteration : 2366ms (type-hinting into constructor of A)
+      // VolSet #5 iteration : 2322ms (type-hinting into Vol.set())
+      // VolSet #5 iteration : 2314ms (switch ax & ay loops)
+      
+      //var A = new Vol(this.out_sx, this.out_sy, this.out_depth, 0.0);
+      var A = new Vol(this.out_sx |0, this.out_sy |0, this.out_depth |0, 0.0);
+      
+      var V_sx = V.sx |0;
+      var V_sy = V.sy |0;
+      
+      for(var d=0;d<this.out_depth;d++) {
+        var f = this.filters[d];
+        
+        var x = -this.pad |0;
+        var y = -this.pad |0;
+        var xy_stride = this.stride |0;
+        
+        //var f_depth = f.depth |0; 
+        
+        //y = -this.pad |0;
+        for(var ay=0; ay<this.out_sy; y+=xy_stride,ay++) {  // xy_stride
+          x = -this.pad |0;
+          for(var ax=0; ax<this.out_sx; x+=xy_stride,ax++) {  // xy_stride
+
+            // convolve centered at this particular location
+            // could be bit more efficient, going for correctness first
+            var a = 0.0;
+            
+            for(var fy=0;fy<f.sy;fy++) {
+              var oy = y+fy; // coordinates in the original input array coordinates
+              for(var fx=0;fx<f.sx;fx++) {
+                var ox = x+fx;
+                if(oy>=0 && oy<V_sy && ox>=0 && ox<V_sx) {
+                  //var fw_base = ((f.sx * fy)+fx)*f.depth; // Factoring this out doesn't help (after warm-up)
+                  //var Vw_base = ((V_sx * oy)+ox)*V.depth; // Factoring this out doesn't help (after warm-up)
+                  
+                  for(var fd=0;fd<f.depth;fd++) {
+                    //a += f.get(fx, fy, fd) * V.get(ox, oy, fd);
+                    // avoid function call overhead (x2) for efficiency, compromise modularity :(
+                    a += f.w[((f.sx * fy)+fx)*f.depth+fd] * V.w[((V_sx * oy)+ox)*V.depth+fd];
+                    
+                    //a += f.w[((f.sx * fy)+fx)*f_depth+fd] * V.w[((V.sx * oy)+ox)*V.depth+fd];  // No benefit for f_depth
+                    //a += f.w[fw_base+fd] * V.w[Vw_base+fd];  // No benefit (after warm-up)
                   }
                 }
               }

@@ -27,7 +27,7 @@
       this.sx = sx;
       this.sy = sy;
       this.depth = depth;
-      var n = sx*sy*depth;
+      var n = this.sx*this.sy*this.depth;
       this.w = global.zeros(n);
       this.dw = global.zeros(n);
       if(typeof c === 'undefined') {
@@ -52,7 +52,8 @@
       return this.w[ix];
     },
     set: function(x, y, d, v) { 
-      var ix=((this.sx * y)+x)*this.depth+d;
+      //var ix=((this.sx * y)+x)*this.depth+d;
+      var ix=((this.sx * (y|0))+(x|0))*this.depth+(d|0);
       this.w[ix] = v; 
     },
     add: function(x, y, d, v) { 
