@@ -91,7 +91,7 @@
       // xy->yx #5 iteration : 2398ms (switch loop order, so that faster moving indices inside (better cache perf))
       // contru #5 iteration : 2366ms (type-hinting into constructor of A)
       // VolSet #5 iteration : 2322ms (type-hinting into Vol.set())
-      // VolSet #5 iteration : 2314ms (switch ax & ay loops)
+      // ax->ay #5 iteration : 2314ms (switch ax & ay loops)
       
       //var A = new Vol(this.out_sx, this.out_sy, this.out_depth, 0.0);
       var A = new Vol(this.out_sx |0, this.out_sy |0, this.out_depth |0, 0.0);
